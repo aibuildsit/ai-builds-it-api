@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import os
 import requests
+import json
 
 app = Flask(__name__)
 
@@ -24,6 +25,39 @@ def chat():
     if not NVIDIA_API_KEY:
         return jsonify({"error": "Brak NVIDIA_API_KEY"}), 500
 
+    system_prompt = """
+Jesteś AI BUILDS IT dla Roblox.
+
+Twoim zadaniem jest zamieniać polecenia gracza na budowanie z klocków.
+
+KAŻDY klocek ma rozmiar 1x1x1.
+
+Odpowiadaj WYŁĄCZNIE poprawnym JSON-em.
+
+Format:
+
+{
+  "reply": "krótka wiadomość dla gracza",
+  "blocks": [
+    {
+      "x": 0,
+      "y": 0,
+      "z": 0,
+      "color": [255, 0, 0]
+    }
+  ]
+}
+
+Zasady:
+- x, y, z muszą być liczbami całkowitymi.
+- color to [R,G,B], każda liczba od 0 do 255.
+- Jeden element blocks = jeden klocek 1x1x1.
+- Nie twórz więcej niż 500 klocków w jednej odpowiedzi.
+- Jeśli gracz nie prosi o budowanie, blocks ma być pustą tablicą.
+- Nie dodawaj markdownu.
+- Nie dodawaj ```json.
+"""
+
     headers = {
         "Authorization": f"Bearer {NVIDIA_API_KEY}",
         "Content-Type": "application/json"
@@ -34,19 +68,15 @@ def chat():
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "Jesteś AI BUILDS IT. "
-                    "Pomagasz graczowi tworzyć konstrukcje w Robloxie. "
-                    "Odpowiadaj jasno i krótko."
-                )
+                "content": system_prompt
             },
             {
                 "role": "user",
                 "content": message
             }
         ],
-        "temperature": 0.7,
-        "max_tokens": 500
+        "temperature": 0.2,
+        "max_tokens": 4000
     }
 
     try:
@@ -59,8 +89,7 @@ def chat():
     except requests.RequestException as e:
         print("REQUEST ERROR:", str(e))
         return jsonify({
-            "error": "Nie można połączyć się z NVIDIA API",
-            "details": str(e)
+            "error": "Nie można połączyć się z NVIDIA API"
         }), 502
 
     if response.status_code != 200:
@@ -75,17 +104,25 @@ def chat():
 
     try:
         result = response.json()
-        reply = result["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError) as e:
-        print("INVALID NVIDIA RESPONSE:", response.text)
-        return jsonify({
-            "error": "Nieprawidłowa odpowiedź NVIDIA",
-            "details": str(e)
-        }), 502
+        content = result["choices"][0]["message"]["content"]
 
-    return jsonify({
-        "reply": reply
-    })
+        ai_data = json.loads(content)
+
+        if "reply" not in ai_data:
+            ai_data["reply"] = "Gotowe!"
+
+        if "blocks" not in ai_data:
+            ai_data["blocks"] = []
+
+        return jsonify(ai_data)
+
+    except Exception as e:
+        print("INVALID AI RESPONSE:", response.text)
+        print("ERROR:", str(e))
+
+        return jsonify({
+            "error": "AI zwróciło nieprawidłowy JSON"
+        }), 502
 
 
 if __name__ == "__main__":
