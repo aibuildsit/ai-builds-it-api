@@ -5,12 +5,13 @@ import requests
 app = Flask(__name__)
 
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-
 NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
 
 @app.get("/")
 def home():
     return "AI BUILDS IT API is online!"
+
 
 @app.post("/chat")
 def chat():
@@ -33,7 +34,11 @@ def chat():
         "messages": [
             {
                 "role": "system",
-                "content": "Jesteś AI BUILDS IT. Pomagasz graczowi tworzyć konstrukcje w Robloxie."
+                "content": (
+                    "Jesteś AI BUILDS IT. "
+                    "Pomagasz graczowi tworzyć konstrukcje w Robloxie. "
+                    "Odpowiadaj jasno i krótko."
+                )
             },
             {
                 "role": "user",
@@ -44,22 +49,39 @@ def chat():
         "max_tokens": 500
     }
 
-    response = requests.post(
-        NVIDIA_URL,
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
+    try:
+        response = requests.post(
+            NVIDIA_URL,
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+    except requests.RequestException as e:
+        print("REQUEST ERROR:", str(e))
+        return jsonify({
+            "error": "Nie można połączyć się z NVIDIA API",
+            "details": str(e)
+        }), 502
 
     if response.status_code != 200:
+        print("NVIDIA STATUS:", response.status_code)
+        print("NVIDIA RESPONSE:", response.text)
+
         return jsonify({
             "error": "NVIDIA API error",
+            "status": response.status_code,
             "details": response.text
         }), 502
 
-    result = response.json()
-
-    reply = result["choices"][0]["message"]["content"]
+    try:
+        result = response.json()
+        reply = result["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError) as e:
+        print("INVALID NVIDIA RESPONSE:", response.text)
+        return jsonify({
+            "error": "Nieprawidłowa odpowiedź NVIDIA",
+            "details": str(e)
+        }), 502
 
     return jsonify({
         "reply": reply
