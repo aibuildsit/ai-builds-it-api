@@ -2,12 +2,13 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import json
-import re
 
 app = Flask(__name__)
 
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
 NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+
+MODEL = "openai/gpt-oss-20b"
 
 
 @app.get("/")
@@ -27,76 +28,91 @@ def chat():
         return jsonify({"error": "Brak NVIDIA_API_KEY"}), 500
 
     system_prompt = """
-Jesteś AI BUILDS IT.
+Jesteś AI BUILDS IT dla Roblox.
 
-Masz sterować budowaniem w Roblox.
+Twoim zadaniem jest odpowiadać na polecenia gracza
+i tworzyć instrukcje budowania.
 
-Gdy użytkownik chce coś ZBUDOWAĆ, MUSISZ zwrócić dane bloków.
+Każdy klocek ma rozmiar 1x1x1.
 
-Każdy blok ma dokładnie rozmiar 1x1x1.
+Jeżeli gracz chce coś zbudować, zwróć odpowiednie
+elementy w tablicy blocks.
 
-BARDZO WAŻNE:
-Twoja odpowiedź MUSI być poprawnym JSON-em.
-Nie pisz instrukcji dla Roblox Studio.
-Nie pisz Markdown.
-Nie używaj tabel.
-Nie używaj ```.
+Jeżeli gracz nie chce budować, blocks musi być pustą tablicą.
 
-FORMAT:
+Nie opisuj jak budować w Roblox Studio.
+Nie dawaj poradników.
+Nie używaj Markdown.
 
-{
-  "reply": "Gotowe!",
-  "blocks": [
-    {
-      "x": 0,
-      "y": 0,
-      "z": 0,
-      "color": [255, 0, 0]
-    }
-  ]
-}
+Zwróć dane zgodne ze schematem JSON.
 
-Przykład:
+Przykład dla:
+"zbuduj ścianę 3x3"
 
-Użytkownik:
-zbuduj ścianę 3x3
+blocks powinno zawierać dokładnie 9 klocków:
 
-Musisz zwrócić:
-
-{
-  "reply": "Gotowe! Zbudowałem ścianę 3x3.",
-  "blocks": [
-    {"x":0,"y":0,"z":0,"color":[255,0,0]},
-    {"x":1,"y":0,"z":0,"color":[255,0,0]},
-    {"x":2,"y":0,"z":0,"color":[255,0,0]},
-    {"x":0,"y":1,"z":0,"color":[255,0,0]},
-    {"x":1,"y":1,"z":0,"color":[255,0,0]},
-    {"x":2,"y":1,"z":0,"color":[255,0,0]},
-    {"x":0,"y":2,"z":0,"color":[255,0,0]},
-    {"x":1,"y":2,"z":0,"color":[255,0,0]},
-    {"x":2,"y":2,"z":0,"color":[255,0,0]}
-  ]
-}
-
-Jeżeli użytkownik NIE chce budować:
-
-{
-  "reply": "Cześć!",
-  "blocks": []
-}
-
-Maksymalnie 100 bloków w jednej odpowiedzi.
+x,y,z są liczbami całkowitymi.
+color jest tablicą RGB.
 """
+
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "reply": {
+                "type": "string"
+            },
+            "blocks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "x": {
+                            "type": "integer"
+                        },
+                        "y": {
+                            "type": "integer"
+                        },
+                        "z": {
+                            "type": "integer"
+                        },
+                        "color": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer"
+                            },
+                            "minItems": 3,
+                            "maxItems": 3
+                        }
+                    },
+                    "required": [
+                        "x",
+                        "y",
+                        "z",
+                        "color"
+                    ],
+                    "additionalProperties": False
+                }
+            }
+        },
+        "required": [
+            "reply",
+            "blocks"
+        ],
+        "additionalProperties": False
+    }
 
 
     headers = {
         "Authorization": f"Bearer {NVIDIA_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
 
 
     payload = {
-        "model": "openai/gpt-oss-20b",
+        "model": MODEL,
+
         "messages": [
             {
                 "role": "system",
@@ -107,31 +123,56 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
                 "content": message
             }
         ],
-        "temperature": 0.0,
-        "max_tokens": 4000
+
+        "temperature": 0,
+
+        "max_tokens": 4096,
+
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "roblox_build",
+                "schema": schema
+            }
+        }
     }
 
 
     try:
-
         response = requests.post(
             NVIDIA_URL,
             headers=headers,
             json=payload,
-            timeout=60
+            timeout=45
         )
 
+    except requests.Timeout:
+        return jsonify({
+            "error": "NVIDIA API timeout"
+        }), 504
+
     except requests.RequestException as e:
+        print("REQUEST ERROR:", str(e))
 
         return jsonify({
-            "error": "Nie można połączyć się z NVIDIA API",
-            "details": str(e)
+            "error": "Nie można połączyć się z NVIDIA API"
         }), 502
+
+
+    # NVIDIA może zwrócić 202.
+    if response.status_code == 202:
+
+        print("NVIDIA zwróciło 202 - wynik oczekuje.")
+
+        return jsonify({
+            "error": "NVIDIA API nadal przetwarza żądanie. Spróbuj ponownie."
+        }), 503
 
 
     if response.status_code != 200:
 
-        print(response.text)
+        print("NVIDIA STATUS:", response.status_code)
+        print("NVIDIA RESPONSE:", response.text)
 
         return jsonify({
             "error": "NVIDIA API error",
@@ -150,42 +191,18 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
         print(content)
 
 
-        # Próba znalezienia JSON-a
-        json_text = content.strip()
-
-        # Usuwanie ```json
-        json_text = re.sub(
-            r"```json\s*",
-            "",
-            json_text,
-            flags=re.IGNORECASE
-        )
-
-        json_text = re.sub(
-            r"```\s*",
-            "",
-            json_text
-        )
-
-        # Szukanie pierwszego { i ostatniego }
-        start = json_text.find("{")
-        end = json_text.rfind("}")
-
-        if start != -1 and end != -1:
-
-            json_text = json_text[start:end + 1]
-
-
-        ai_data = json.loads(json_text)
+        ai_data = json.loads(content)
 
 
         if not isinstance(ai_data, dict):
-            raise ValueError("JSON nie jest obiektem")
+            raise ValueError("AI nie zwróciło obiektu JSON")
 
 
-        reply = ai_data.get(
-            "reply",
-            "Gotowe!"
+        reply = str(
+            ai_data.get(
+                "reply",
+                "Gotowe!"
+            )
         )
 
 
@@ -202,7 +219,8 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
         valid_blocks = []
 
 
-        for block in blocks:
+        # Maksymalnie 100 bloków na jedno żądanie.
+        for block in blocks[:100]:
 
             if not isinstance(block, dict):
                 continue
@@ -213,46 +231,18 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
                 y = int(block["y"])
                 z = int(block["z"])
 
-                color = block.get(
-                    "color",
-                    [255, 255, 255]
-                )
+                color = block["color"]
 
+                if not isinstance(color, list):
+                    continue
 
-                if (
-                    not isinstance(color, list)
-                    or len(color) != 3
-                ):
-
-                    color = [
-                        255,
-                        255,
-                        255
-                    ]
-
+                if len(color) != 3:
+                    continue
 
                 color = [
-                    max(
-                        0,
-                        min(
-                            255,
-                            int(color[0])
-                        )
-                    ),
-                    max(
-                        0,
-                        min(
-                            255,
-                            int(color[1])
-                        )
-                    ),
-                    max(
-                        0,
-                        min(
-                            255,
-                            int(color[2])
-                        )
-                    )
+                    max(0, min(255, int(color[0]))),
+                    max(0, min(255, int(color[1]))),
+                    max(0, min(255, int(color[2])))
                 ]
 
 
@@ -266,15 +256,11 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
 
             except (
                 KeyError,
-                ValueError,
                 TypeError,
+                ValueError,
                 IndexError
             ):
-
                 continue
-
-
-        valid_blocks = valid_blocks[:100]
 
 
         print(
@@ -284,23 +270,20 @@ Maksymalnie 100 bloków w jednej odpowiedzi.
 
 
         return jsonify({
-            "reply": str(reply),
+            "reply": reply,
             "blocks": valid_blocks
         })
 
 
     except Exception as e:
 
-        print(
-            "JSON ERROR:",
-            str(e)
-        )
+        print("JSON ERROR:", str(e))
+        print("RAW RESPONSE:", response.text)
 
         return jsonify({
-            "reply": "AI nie zwróciło poprawnych danych budowania.",
-            "blocks": [],
-            "error": str(e)
-        }), 200
+            "error": "Nieprawidłowa odpowiedź AI",
+            "details": str(e)
+        }), 502
 
 
 if __name__ == "__main__":
@@ -316,4 +299,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=port
     )
-    
