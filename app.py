@@ -4,7 +4,7 @@ import requests
 
 app = Flask(__name__)
 
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
 NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
 
